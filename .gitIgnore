@@ -1,0 +1,92 @@
+# ======================
+# Python
+# ======================
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python packaging
+dist/
+build/
+*.egg-info/
+
+
+# ======================
+# Environment / Secrets
+# ======================
+
+.env
+.env.*
+!.env.example
+
+
+# ======================
+# Testing
+# ======================
+
+.pytest_cache/
+.coverage
+htmlcov/
+
+
+# ======================
+# IDE
+# ======================
+
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+
+# ======================
+# Logs
+# ======================
+
+*.log
+
+
+# ======================
+# AI / ML Data
+# ======================
+
+data/raw/
+data/processed/
+
+# Model files
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+
+# ======================
+# Jupyter
+# ======================
+
+.ipynb_checkpoints/
+
+
+# ======================
+# Local databases
+# ======================
+
+*.sqlite
+*.db
+
+
+# ======================
+# Temporary files
+# ======================
+
+tmp/
+temp/
+*.tmp
