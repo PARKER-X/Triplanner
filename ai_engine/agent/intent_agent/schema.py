@@ -24,14 +24,19 @@ class Constraints(BaseModel):
         destination (Optional[str]): The desired destination for the plan.
         duration_days (Optional[int]): The desired duration of the plan in days.
     """
-
+    source: Optional[str] = Field(
+        default=None,
+        description="Starting location if mentioned."
+    )
     budget: Optional[float] = Field(None, description="The maximum budget for the plan.")
     destination: Optional[str] = Field(
     None,
     description="The desired destination for the plan."
 )
     duration_days: Optional[int] = Field(None, description="The desired duration of the plan in days.")
-
+    start_date: Optional[str] = Field(
+        default=None
+    )
 
 class Traveler(BaseModel):
     """

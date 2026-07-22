@@ -1,36 +1,51 @@
 import google.generativeai as genai
 
-from .base import LLMProvider
+from ai_engine.core.llm.base import LLMProvider
+from ai_engine.core.config import settings
+
 
 
 class GeminiProvider(LLMProvider):
 
-    def __init__(self, api_key):
+
+    def __init__(self):
 
         genai.configure(
-            api_key=api_key
+            api_key=settings.GEMINI_API_KEY
         )
 
+
         self.model = genai.GenerativeModel(
-            "gemini-2.0-flash"
+            settings.LLM_MODEL
         )
 
 
     def generate(
         self,
-        system_prompt,
-        user_prompt
+        system_prompt: str,
+        user_prompt: str
     ):
 
+
         response = self.model.generate_content(
-            f"""
-            SYSTEM:
-            {system_prompt}
+            [
+                {
+                    "role": "user",
+                    "parts": [
+                        f"""
+                        SYSTEM:
+
+                        {system_prompt}
 
 
-            USER:
-            {user_prompt}
-            """
+                        USER:
+
+                        {user_prompt}
+                        """
+                    ]
+                }
+            ]
         )
+
 
         return response.text
