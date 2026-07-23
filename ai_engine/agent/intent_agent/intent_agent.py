@@ -20,22 +20,21 @@ class IntentAgent:
 
 
 
-    def run(
-        self,
-        user_input:str
-    ):
-
-
+    def run(self, user_input: str) -> Intent:
         response = self.llm.generate(
-
             system_prompt=self.prompt,
-
-            user_prompt=user_input
-
+            user_prompt=user_input,
         )
 
+        if not response:
+            raise RuntimeError("LLM returned an empty response.")
 
-        data = json.loads(response)
+        try:
+            data = json.loads(response)
+        except json.JSONDecodeError as e:
+            print("\n===== RAW LLM RESPONSE =====")
+            print(response)
+            print("============================\n")
+            raise ValueError(f"Invalid JSON returned by LLM: {e}")
 
-
-        return Intent(**data)
+        return Intent.model_validate(data)

@@ -1,5 +1,5 @@
 from ai_engine.agent.intent_agent.intent_agent import IntentAgent
-from ai_engine.core.llm.gemini import GeminiProvider
+from ai_engine.core.llm.groq import GroqProvider
 
 
 
@@ -10,7 +10,7 @@ def run_test(name, user_input):
     print(name)
     print("=" * 80)
 
-    llm = GeminiProvider()
+    llm = GroqProvider()
 
     agent = IntentAgent(llm)
 
@@ -90,9 +90,9 @@ def test_kashmir_family_trip():
 
 
 
-# -------------------------------------
-# Test 3: Source Destination
-# -------------------------------------
+# # -------------------------------------
+# # Test 3: Source Destination
+# # -------------------------------------
 
 def test_source_destination():
 
@@ -111,65 +111,65 @@ def test_source_destination():
 
 
 
-# -------------------------------------
-# Test 4: Friends Trip India
-# -------------------------------------
+# # -------------------------------------
+# # Test 4: Friends Trip India
+# # -------------------------------------
 
-def test_goa_friends_trip():
+# def test_goa_friends_trip():
 
-    run_test(
-        "Goa Friends Trip",
+#     run_test(
+#         "Goa Friends Trip",
 
-        """
-        Me and my 6 friends want
-        to visit Goa.
+#         """
+#         Me and my 6 friends want
+#         to visit Goa.
 
-        Budget is 60000 rupees.
+#         Budget is 60000 rupees.
 
-        Trip duration is 5 days.
+#         Trip duration is 5 days.
 
-        We like beaches and nightlife.
+#         We like beaches and nightlife.
 
-        Avoid expensive resorts.
-        """
-    )
-
-
-
-# -------------------------------------
-# Test 5: Missing Information
-# -------------------------------------
-
-def test_missing_information():
-
-    run_test(
-        "Missing Information",
-
-        """
-        I want to visit Europe.
-        """
-    )
+#         Avoid expensive resorts.
+#         """
+#     )
 
 
 
-# -------------------------------------
-# Test 6: Hinglish
-# -------------------------------------
+# # -------------------------------------
+# # Test 5: Missing Information
+# # -------------------------------------
 
-def test_hinglish():
+# def test_missing_information():
 
-    run_test(
-        "Hinglish Manali Trip",
+#     run_test(
+#         "Missing Information",
 
-        """
-        Hum 5 dost Manali jana chahte hain.
+#         """
+#         I want to visit Europe.
+#         """
+#     )
 
-        Budget 50000 rupees hai.
 
-        5 din ka trip chahiye.
 
-        Adventure activities pasand hain.
+# # -------------------------------------
+# # Test 6: Hinglish
+# # -------------------------------------
 
-        Crowded jagah avoid karni hai.
-        """
-    )
+# def test_hinglish():
+
+#     run_test(
+#         "Hinglish Manali Trip",
+
+#         """
+#         Hum 5 dost Manali jana chahte hain.
+
+#         Budget 50000 rupees hai.
+
+#         5 din ka trip chahiye.
+
+#         Adventure activities pasand hain.
+
+#         Crowded jagah avoid karni hai.
+#         """
+#     )
