@@ -46,8 +46,6 @@ class ResearchAgent:
         
         Input: planning_state with intent + constraints
         Output: ResearchResult with real activities and grounding data
-        
-        FIX: Extract preferences from intent dict, not planning_state
         """
         # Extract from planning_state
         intent_dict = planning_state.intent  # This is a dict
@@ -143,9 +141,10 @@ class ResearchAgent:
         
         planning_state.candidates = {
             "activities": [a.model_dump() for a in filtered_activities],
-            "distances": distances,  # FIXED: Already dicts
+            "distances": distances,  # Already dicts
             "neighborhoods": result.grounding.neighborhoods
         }
+        
         print("\n" + "="*80)
         print(f"✅ RESEARCH COMPLETE")
         print(f"   Activities found: {len(filtered_activities)}")
@@ -255,77 +254,94 @@ class ResearchAgent:
         interests: List[str],
         party_size: int
     ) -> List[Activity]:
-        """Filter activities by user constraints"""
+        """Filter activities - PRIORITIZE QUALITY, not quantity"""
         
         filtered = []
         
         # Daily budget per person
         daily_budget_per_person = budget / duration_days / party_size
-        max_activity_cost = daily_budget_per_person * 0.5  # Max 50% of daily budget per activity
         
-        print(f"   Daily budget per person: ₹{daily_budget_per_person:.0f}")
-        print(f"   Max per activity: ₹{max_activity_cost:.0f}")
+        print(f"   Daily per person: ₹{daily_budget_per_person:.0f}")
+        print(f"   Interests: {interests}")
+        
+        # IMPORTANT: Don't filter too aggressively
+        # Allow up to 150% of daily budget per premium activity
+        max_expensive_activity = daily_budget_per_person
         
         for activity in activities:
-            # Skip accommodations (not activities)
+            # Skip accommodations
             if activity.category in ["hotel", "hostel", "guest_house", "apartment"]:
                 continue
             
-            # Budget check - if cost is specified, check it
-            if activity.cost_per_person_inr and activity.cost_per_person_inr > max_activity_cost:
-                if activity.cost_per_person_inr > 0:  # Skip only expensive ones
-                    if activity.cost_per_person_inr > daily_budget_per_person:
-                        continue
+            # Skip generic free places (unless matches interests)
+            if activity.cost_per_person_inr == 0:
+                # Only keep free places that match interests
+                matches = self._get_matching_interests(activity, interests)
+                if not matches:
+                    continue
+            
+            # Budget check - be more lenient for quality experiences
+            if activity.cost_per_person_inr > max_expensive_activity * 1.5:
+                continue
             
             # Match interests
             matches = self._get_matching_interests(activity, interests)
             activity.matches_interests = matches
             
-            # Keep if it matches interests OR is a general attraction
-            if matches or activity.category in ["attraction", "viewpoint", "park"]:
+            # Keep if matches interests OR is highly rated
+            if matches or activity.rating >= 4.5:
                 filtered.append(activity)
+        
+        # Sort by: rating × interest match
+        def score_activity(a):
+            interest_score = len(a.matches_interests) * 100
+            rating_score = a.rating * 20
+            cost_score = -a.cost_per_person_inr * 0.1  # Prefer paid (quality)
+            return interest_score + rating_score + cost_score
+        
+        filtered.sort(key=score_activity, reverse=True)
         
         return filtered
     
     def _get_matching_interests(self, activity: Activity, interests: List[str]) -> List[str]:
-        """Get which user interests match this activity"""
+        """Match interests PROPERLY - not just category"""
         
         category_interest_map = {
+            # FOOD
             "restaurant": ["food"],
             "cafe": ["food"],
             "bar": ["food", "relaxation"],
             "fast_food": ["food"],
+            "bakery": ["food"],
+            "market": ["food"],
+            
+            # CULTURE - QUALITY PLACES ONLY
             "museum": ["culture"],
             "art_gallery": ["culture"],
-            "park": ["nature", "relaxation"],
-            "garden": ["nature"],
-            "swimming_pool": ["relaxation", "adventure"],
             "monument": ["culture"],
-            "viewpoint": ["nature"],
-            "tour_operator": ["adventure"],
-            "market": ["shopping", "food"],
+            "historical_building": ["culture"],
+            "library": ["culture"],
+            "temple": ["culture"],
+            "church": ["culture"],
+            
+            # RELAXATION
+            "park": ["relaxation", "nature"],
+            "garden": ["relaxation", "nature"],
+            "swimming_pool": ["relaxation"],
             "spa": ["relaxation"],
             "beach": ["relaxation", "nature"],
-            "library": ["culture"]
+            "viewpoint": ["relaxation", "nature"]
         }
         
         matches = []
         
-        # Check category matches
-        if activity.category in category_interest_map:
-            potential_matches = category_interest_map[activity.category]
-            # Only add if user is interested in it
+        # Check category match
+        category_lower = activity.category.lower()
+        if category_lower in category_interest_map:
+            potential_matches = category_interest_map[category_lower]
             for interest in interests:
                 if interest.lower() in potential_matches:
                     matches.append(interest)
-        
-        # Check interest keywords in description
-        if interests:
-            for interest in interests:
-                interest_lower = interest.lower()
-                if interest_lower in activity.description.lower():
-                    if interest not in matches:
-                        matches.append(interest)
         
         return list(set(matches))  # Remove duplicates
     

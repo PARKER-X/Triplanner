@@ -1,0 +1,669 @@
+"""
+Planner Agent - Creates optimized day-by-day itinerary
+Based on Google's LLM-based trip planning research
+
+KEY INSIGHT: Activities must be sequenced by location (TSP-like problem)
+Travel time between activities is CRITICAL
+"""
+
+import json
+from datetime import datetime, timedelta
+from typing import List, Dict, Optional, Tuple
+import math
+
+from .schema import DayPlan, DayActivity, Meal, ItineraryStats, PlannerResult
+from ..research_agent.schema import Activity
+
+
+class PlannerAgent:
+    """
+    Planner Agent - Creates realistic, location-optimized itineraries
+    
+    Core algorithm:
+    1. Get all activities + their distances
+    2. For each day: 
+       a. Start from hotel/accommodation
+       b. Use nearest-neighbor to sequence activities
+       c. Calculate actual travel time between each
+       d. Fit within day (9 AM - 9 PM)
+       e. Respect budgets
+    """
+    
+    def __init__(self, llm):
+        """Initialize planner"""
+        self.llm = llm
+        
+        with open("ai_engine/agent/planner_agent/prompt.txt") as f:
+            self.prompt = f.read()
+        
+        print("✅ Planner Agent initialized (with location optimization)")
+    
+    def run(self, planning_state) -> PlannerResult:
+        """Main planner execution"""
+        
+        print("\n" + "="*80)
+        print("📅 PLANNER AGENT: Creating location-optimized itinerary")
+        print("="*80)
+        
+        # Extract data
+        intent_dict = planning_state.intent
+        constraints_dict = planning_state.constraints
+        candidates = planning_state.candidates
+        
+        destination = constraints_dict.get("destination", "")
+        duration_days = constraints_dict.get("duration_days", 3)
+        budget = constraints_dict.get("budget", 10000)
+        
+        preferences_dict = intent_dict.get("preferences", {})
+        interests = preferences_dict.get("priorities", [])
+        
+        traveler_dict = intent_dict.get("traveler", {})
+        party_size = traveler_dict.get("count", 4)
+        
+        # Get activities and distances
+        activities_raw = candidates.get("activities", [])
+        distances_raw = candidates.get("distances", [])
+        neighborhoods = candidates.get("neighborhoods", {})
+        
+        print(f"   Destination: {destination}")
+        print(f"   Duration: {duration_days} days | Budget: ₹{budget}")
+        print(f"   Available: {len(activities_raw)} activities")
+        print(f"   Interests: {interests}")
+        
+        if not activities_raw:
+            print("❌ No activities available")
+            return self._create_empty_result(destination, duration_days)
+        
+        # Convert activities
+        activities = self._convert_activities(activities_raw)
+        
+        # Build distance lookup
+        distance_map = self._build_distance_map(distances_raw, activities)
+        
+        # Create daily plans with location optimization
+        print(f"\n📋 Creating {duration_days}-day itinerary with location routing...")
+        daily_plans = []
+        
+        # Distribute activities across days
+        activities_per_day = len(activities) // duration_days
+        activity_index = 0
+        
+        for day_num in range(1, duration_days + 1):
+            print(f"\n   Day {day_num}:")
+            
+            # Get activities for this day
+            day_activities_raw = activities[
+                activity_index:activity_index + activities_per_day
+            ]
+            activity_index += activities_per_day
+            
+            # Create optimized day plan
+            day_plan = self._create_optimized_day_plan(
+                day_num,
+                day_activities_raw,
+                distance_map,
+                budget / duration_days,
+                party_size,
+                interests
+            )
+            
+            daily_plans.append(day_plan)
+            
+            print(f"      ✓ {len(day_plan.activities)} activities sequenced")
+            print(f"      ✓ Total travel: {day_plan.total_walking_km:.1f} km")
+            print(f"      ✓ Cost: ₹{day_plan.total_cost:.0f}")
+        
+        # Calculate statistics
+        print(f"\n📊 Calculating trip statistics...")
+        stats = self._calculate_stats(daily_plans, activities, interests)
+        
+        # Create result
+        result = PlannerResult(
+            trip_title=self._generate_trip_title(destination, interests),
+            trip_summary=self._generate_trip_summary(destination, duration_days, interests),
+            destination=destination,
+            duration_days=duration_days,
+            days=daily_plans,
+            stats=stats,
+            highlights=self._generate_highlights(daily_plans, interests),
+            tips=self._generate_tips(destination),
+            warnings=self._generate_warnings(daily_plans, budget)
+        )
+        
+        # Store in planning state
+        planning_state.plans = [day.model_dump() for day in daily_plans]
+        planning_state.selected_plan = result.model_dump()
+        
+        print("\n" + "="*80)
+        print(f"✅ PLANNING COMPLETE")
+        print(f"   Days: {len(daily_plans)}")
+        print(f"   Activities: {stats.total_activities}")
+        print(f"   Total distance: {stats.total_walking_km:.1f} km")
+        print(f"   Total cost: ₹{stats.total_cost:.0f}")
+        print("="*80 + "\n")
+        
+        return result
+    
+    def _convert_activities(self, activities_raw: List[Dict]) -> List[Dict]:
+        """Convert raw activities to standardized format"""
+        converted = []
+        
+        for activity in activities_raw:
+            converted.append({
+                "id": activity.get("id", ""),
+                "name": activity.get("name", ""),
+                "category": activity.get("category", ""),
+                "lat": activity.get("coordinates", {}).get("lat", 0),
+                "lng": activity.get("coordinates", {}).get("lng", 0),
+                "location": activity.get("area", ""),
+                "address": activity.get("address", ""),
+                "cost": activity.get("cost_per_person_inr", 0),
+                "cost_type": activity.get("cost_type", "free"),
+                "duration_minutes": activity.get("duration_minutes", 60),
+                "rating": activity.get("rating", 0),
+                "description": activity.get("description", ""),
+                "matches_interests": activity.get("matches_interests", [])
+            })
+        
+        return converted
+    
+    def _build_distance_map(self, distances_raw: List[Dict], activities: List[Dict]) -> Dict:
+        """Build a lookup map for distances between activities"""
+        
+        distance_map = {}
+        
+        for distance_data in distances_raw:
+            from_id = distance_data.get("from_activity", "")
+            to_id = distance_data.get("to_activity", "")
+            distance_km = distance_data.get("distance_km", 0)
+            travel_time = distance_data.get("travel_time_minutes", 0)
+            
+            # Create bidirectional mapping
+            distance_map[(from_id, to_id)] = {
+                "distance_km": distance_km,
+                "travel_time_minutes": travel_time
+            }
+            distance_map[(to_id, from_id)] = {
+                "distance_km": distance_km,
+                "travel_time_minutes": travel_time
+            }
+        
+        return distance_map
+    
+    def _create_optimized_day_plan(
+        self,
+        day_num: int,
+        activities: List[Dict],
+        distance_map: Dict,
+        daily_budget: float,
+        party_size: int,
+        interests: List[str]
+    ) -> DayPlan:
+        """Create a day plan with location-optimized sequencing"""
+        
+        # CRITICAL: Sequence activities to minimize travel
+        # Prefer highly rated activities
+        activities_sorted = sorted(
+            activities,
+            key=lambda a: (a.get("rating", 0), -a.get("cost", 0)),
+            reverse=True
+        )
+        
+        # Use nearest-neighbor algorithm to sequence
+        sequenced = self._nearest_neighbor_sequence(
+            activities_sorted,
+            distance_map
+        )
+        
+        # Schedule activities with times and travel
+        scheduled = self._schedule_with_travel(
+            sequenced,
+            distance_map,
+            daily_budget,
+            interests
+        )
+        
+        # Add meals
+        meals = self._schedule_meals(scheduled, party_size)
+        
+        # Calculate stats
+        total_cost = sum(a.cost_per_person for a in scheduled) * party_size
+        total_cost += sum(m.cost_per_person for m in meals) * party_size
+        
+        total_walking = self._calculate_total_walking(scheduled, distance_map)
+        steps = int(total_walking * 1300)  # ~1300 steps per km
+        
+        theme = self._generate_day_theme(scheduled, interests)
+        
+        return DayPlan(
+            day_number=day_num,
+            theme=theme,
+            activities=scheduled,
+            meals=meals,
+            total_activities=len(scheduled),
+            total_cost=total_cost,
+            total_walking_km=total_walking,
+            estimated_steps=steps,
+            rest_hours=self._calculate_rest_hours(scheduled),
+            notes=self._generate_day_notes(day_num, total_walking)
+        )
+    
+    def _nearest_neighbor_sequence(
+        self,
+        activities: List[Dict],
+        distance_map: Dict
+    ) -> List[Dict]:
+        """
+        Sequence activities using nearest-neighbor algorithm
+        Minimizes total travel distance
+        """
+        
+        if not activities:
+            return []
+        
+        # Start with highest-rated activity
+        sequenced = [activities[0]]
+        remaining = activities[1:]
+        
+        while remaining:
+            current = sequenced[-1]
+            current_id = current.get("id", "")
+            
+            # Find nearest unvisited activity
+            nearest = None
+            nearest_distance = float('inf')
+            
+            for activity in remaining:
+                activity_id = activity.get("id", "")
+                
+                # Get distance
+                distance_data = distance_map.get((current_id, activity_id))
+                if distance_data:
+                    distance = distance_data.get("distance_km", float('inf'))
+                else:
+                    # Estimate Haversine if not in map
+                    distance = self._haversine(
+                        current.get("lat", 0),
+                        current.get("lng", 0),
+                        activity.get("lat", 0),
+                        activity.get("lng", 0)
+                    )
+                
+                if distance < nearest_distance:
+                    nearest_distance = distance
+                    nearest = activity
+            
+            if nearest:
+                sequenced.append(nearest)
+                remaining.remove(nearest)
+            else:
+                break
+        
+        return sequenced
+    
+    def _schedule_with_travel(
+        self,
+        activities: List[Dict],
+        distance_map: Dict,
+        daily_budget: float,
+        interests: List[str]
+    ) -> List[DayActivity]:
+        """Schedule activities with realistic travel times"""
+        
+        scheduled = []
+        current_time = 9 * 60  # 9 AM in minutes
+        current_cost = 0
+        
+        # Reserve budget for meals (₹850 = breakfast + lunch + dinner)
+        remaining_budget = daily_budget - 850
+        
+        for idx, activity in enumerate(activities):
+            # Check if we can fit this activity
+            duration = activity.get("duration_minutes", 60)
+            cost = activity.get("cost", 0)
+            
+            # STRICT budget check
+            if current_cost + cost > remaining_budget * 0.8:
+                # Skip expensive activities if budget is tight
+                if cost > 300:
+                    continue
+            
+            # Check time (must finish by 9 PM = 21:00)
+            if current_time + duration > 21 * 60:
+                break
+            
+            # Skip if we already have a similar activity today
+            existing_categories = [s.category for s in scheduled]
+            if activity.get("category") in existing_categories and activity.get("category") == "cafe":
+                continue
+            
+            # Format time
+            hours = current_time // 60
+            minutes = current_time % 60
+            time_start = f"{int(hours):02d}:{int(minutes):02d}"
+            
+            # End time
+            end_time = current_time + duration
+            end_hours = end_time // 60
+            end_minutes = end_time % 60
+            time_end = f"{int(end_hours):02d}:{int(end_minutes):02d}"
+            
+            # Add travel time to next activity (if exists)
+            if idx < len(activities) - 1:
+                next_activity = activities[idx + 1]
+                current_id = activity.get("id", "")
+                next_id = next_activity.get("id", "")
+                
+                travel_data = distance_map.get((current_id, next_id))
+                if travel_data:
+                    travel_time = travel_data.get("travel_time_minutes", 15)
+                else:
+                    travel_time = 15  # Default 15 min
+            else:
+                travel_time = 0
+            
+            # Create activity
+            scheduled.append(DayActivity(
+                sequence=len(scheduled) + 1,
+                time_start=time_start,
+                time_end=time_end,
+                activity_id=activity.get("id", ""),
+                activity_name=activity.get("name", ""),
+                category=activity.get("category", ""),
+                location=activity.get("location", "Mumbai"),
+                address=activity.get("address", ""),
+                cost_per_person=cost,
+                duration_minutes=duration,
+                description=activity.get("description", ""),
+                why_included=self._get_why_included(activity, interests)
+            ))
+            
+            # Update time (activity + travel buffer)
+            current_time = end_time + travel_time
+            current_cost += cost
+        
+        return scheduled
+    
+    def _get_why_included(self, activity: Dict, interests: List[str]) -> str:
+        """Explain why activity was chosen"""
+        
+        name = activity.get("name", "")
+        category = activity.get("category", "")
+        rating = activity.get("rating", 0)
+        matches = activity.get("matches_interests", [])
+        
+        # Prioritize highly-rated places
+        if rating >= 4.5:
+            if "museum" in category.lower() or "gallery" in category.lower() or "monument" in category.lower():
+                return f"⭐ Top-rated {category.lower()} - cultural experience"
+            elif "restaurant" in category.lower():
+                return f"⭐ Highly-rated local restaurant"
+            else:
+                return f"⭐ Highly-rated attraction"
+        
+        # Prioritize matches
+        if matches:
+            return f"Matches your interest in {matches[0]}"
+        
+        # Default
+        return f"Popular {category.lower()} in the area"
+    
+    def _schedule_meals(self, activities: List[DayActivity], party_size: int) -> List[Meal]:
+        """Schedule meals realistically"""
+        
+        meals = []
+        
+        # Breakfast before first activity
+        meals.append(Meal(
+            type="breakfast",
+            time="08:00",
+            restaurant_name="Hotel Breakfast/Local Cafe",
+            location="Accommodation",
+            cost_per_person=100,
+            cuisine="Indian"
+        ))
+        
+        # Lunch around midday
+        lunch_time = "12:30"
+        meals.append(Meal(
+            type="lunch",
+            time=lunch_time,
+            restaurant_name="Local Restaurant",
+            location="Central Mumbai",
+            cost_per_person=350,
+            cuisine="Indian/International"
+        ))
+        
+        # Dinner evening
+        meals.append(Meal(
+            type="dinner",
+            time="19:30",
+            restaurant_name="Restaurant/Cafe",
+            location="Evening Location",
+            cost_per_person=400,
+            cuisine="Indian/International"
+        ))
+        
+        return meals
+    
+    def _calculate_total_walking(self, activities: List[DayActivity], distance_map: Dict) -> float:
+        """Calculate total walking distance for the day"""
+        
+        total = 0
+        
+        for idx in range(len(activities) - 1):
+            current_id = activities[idx].activity_id
+            next_id = activities[idx + 1].activity_id
+            
+            distance_data = distance_map.get((current_id, next_id))
+            if distance_data:
+                total += distance_data.get("distance_km", 0)
+        
+        return total
+    
+    def _calculate_rest_hours(self, activities: List[DayActivity]) -> float:
+        """Calculate rest/free time"""
+        
+        if not activities:
+            return 24
+        
+        # Total activity time
+        total_activity_minutes = sum(a.duration_minutes for a in activities)
+        
+        # Add meal time (3 hours)
+        total_activity_minutes += 180
+        
+        # Calculate rest
+        total_minutes = 24 * 60
+        rest_minutes = total_minutes - total_activity_minutes
+        
+        return max(0, rest_minutes / 60)
+    
+    def _haversine(self, lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+        """Calculate distance between coordinates"""
+        
+        R = 6371  # Earth radius km
+        
+        lat1_rad = math.radians(lat1)
+        lat2_rad = math.radians(lat2)
+        delta_lat = math.radians(lat2 - lat1)
+        delta_lng = math.radians(lng2 - lng1)
+        
+        a = math.sin(delta_lat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lng/2)**2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+        
+        return R * c
+    
+    def _generate_day_theme(self, activities: List[DayActivity], interests: List[str]) -> str:
+        """Generate theme based on activities"""
+        
+        if not activities:
+            return "Rest Day"
+        
+        categories = [a.category for a in activities]
+        
+        # Count by category
+        food_count = sum(1 for c in categories if "cafe" in c.lower() or "restaurant" in c.lower())
+        culture_count = sum(1 for c in categories if "museum" in c.lower() or "monument" in c.lower() or "gallery" in c.lower())
+        nature_count = sum(1 for c in categories if "park" in c.lower() or "garden" in c.lower())
+        
+        if food_count > culture_count and food_count > nature_count:
+            return "🍽️ Culinary Exploration"
+        elif culture_count > nature_count:
+            return "🏛️ Cultural Journey"
+        elif nature_count > 0:
+            return "🌳 Nature & Relaxation"
+        else:
+            return "🎯 City Discovery"
+    
+    def _generate_day_notes(self, day_num: int, total_walking: float) -> str:
+        """Generate day notes"""
+        
+        if day_num == 1:
+            return "Arrival & orientation day"
+        elif day_num == 2:
+            return f"Full exploration day ({total_walking:.0f}km walking)"
+        else:
+            return f"Final day - enjoy favorites again"
+    
+    def _calculate_stats(
+        self,
+        daily_plans: List[DayPlan],
+        all_activities: List[Dict],
+        interests: List[str]
+    ) -> ItineraryStats:
+        """Calculate trip statistics"""
+        
+        total_activities = sum(len(day.activities) for day in daily_plans)
+        total_cost = sum(day.total_cost for day in daily_plans)
+        total_walking = sum(day.total_walking_km for day in daily_plans)
+        total_steps = sum(day.estimated_steps for day in daily_plans)
+        
+        free_count = sum(1 for a in all_activities if a.get("cost", 0) == 0)
+        paid_count = len(all_activities) - free_count
+        
+        # Interest distribution
+        interest_dist = {}
+        for interest in interests:
+            matching = sum(1 for a in all_activities if interest.lower() in str(a.get("matches_interests", [])).lower())
+            percentage = (matching / len(all_activities) * 100) if all_activities else 0
+            interest_dist[interest] = round(percentage, 1)
+        
+        return ItineraryStats(
+            total_activities=total_activities,
+            total_cost=total_cost,
+            total_walking_km=total_walking,
+            average_daily_cost=total_cost / len(daily_plans) if daily_plans else 0,
+            estimated_total_steps=total_steps,
+            average_daily_walking_km=total_walking / len(daily_plans) if daily_plans else 0,
+            free_activities=free_count,
+            paid_activities=paid_count,
+            interest_distribution=interest_dist,
+            neighborhood_distribution={}
+        )
+    
+    def _generate_trip_title(self, destination: str, interests: List[str]) -> str:
+        """Generate trip title"""
+        
+        if interests:
+            # Use first 2 interests
+            interest_str = " & ".join(interests[:2])
+            # Truncate if too long
+            interest_str = interest_str[:50] if len(interest_str) > 50 else interest_str
+            return f"{destination}: {interest_str}"
+        else:
+            return f"{destination} Exploration Trip"
+    
+    def _generate_trip_summary(self, destination: str, duration: int, interests: List[str]) -> str:
+        """Generate trip summary"""
+        
+        if interests:
+            # Take first 2 interests
+            interest_list = interests[:2]
+            interest_str = ", ".join([str(i)[:30] for i in interest_list])  # Truncate each interest
+            return f"Explore {destination}'s best {interest_str} attractions over {duration} days"
+        else:
+            return f"A {duration}-day exploration of {destination}"
+    
+    def _generate_highlights(self, daily_plans: List[DayPlan], interests: List[str]) -> List[str]:
+        """Generate trip highlights"""
+        
+        highlights = []
+        
+        all_activities = []
+        for day in daily_plans:
+            all_activities.extend(day.activities)
+        
+        if all_activities:
+            total_walking = sum(day.total_walking_km for day in daily_plans)
+            highlights.append(f"Visit {len(all_activities)} carefully selected attractions")
+            highlights.append(f"Optimized routing - {total_walking:.0f}km total travel")
+        
+        if interests:
+            if "food" in str(interests).lower():
+                highlights.append("Discover local culinary gems")
+            if "culture" in str(interests).lower():
+                highlights.append("Explore historical & cultural landmarks")
+            if "relaxation" in str(interests).lower():
+                highlights.append("Peaceful moments in nature")
+        
+        return highlights if highlights else ["Curated travel experience"]
+    
+    def _generate_tips(self, destination: str) -> List[str]:
+        """Generate practical tips"""
+        
+        return [
+            "Wear comfortable walking shoes (20+ km daily)",
+            "Start activities early to beat crowds",
+            "Keep water bottle handy",
+            "Download offline maps of your route",
+            "Check opening hours before visiting",
+            "Book popular restaurants in advance",
+            "Use public transport where possible"
+        ]
+    
+    def _generate_warnings(self, daily_plans: List[DayPlan], budget: float) -> List[str]:
+        """Generate warnings if needed"""
+        
+        warnings = []
+        
+        total_cost = sum(day.total_cost for day in daily_plans)
+        
+        if total_cost > budget * 0.9:
+            shortfall = total_cost - budget
+            warnings.append(f"⚠️ Budget exceeded by ₹{shortfall:.0f}")
+        
+        for day in daily_plans:
+            if day.total_walking_km > 25:
+                warnings.append(f"⚠️ Day {day.day_number}: {day.total_walking_km:.0f}km walking - very intense")
+            
+            if day.rest_hours < 4:
+                warnings.append(f"⚠️ Day {day.day_number}: Only {day.rest_hours:.1f}h rest time")
+        
+        return warnings
+    
+    def _create_empty_result(self, destination: str, duration: int) -> PlannerResult:
+        """Create empty result"""
+        
+        return PlannerResult(
+            trip_title=f"{duration}-Day {destination}",
+            trip_summary="Could not create itinerary",
+            destination=destination,
+            duration_days=duration,
+            days=[],
+            stats=ItineraryStats(
+                total_activities=0,
+                total_cost=0,
+                total_walking_km=0,
+                average_daily_cost=0,
+                estimated_total_steps=0,
+                average_daily_walking_km=0,
+                free_activities=0,
+                paid_activities=0,
+                interest_distribution={},
+                neighborhood_distribution={}
+            ),
+            highlights=[],
+            tips=[],
+            warnings=["No activities found"]
+        )
