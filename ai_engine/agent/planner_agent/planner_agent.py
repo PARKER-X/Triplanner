@@ -370,7 +370,7 @@ class PlannerAgent:
                 activity_id=activity.get("id", ""),
                 activity_name=activity.get("name", ""),
                 category=activity.get("category", ""),
-                location=activity.get("location", "Mumbai"),
+                location=activity.get("location", destination),
                 address=activity.get("address", ""),
                 cost_per_person=cost,
                 duration_minutes=duration,
@@ -420,7 +420,7 @@ class PlannerAgent:
             restaurant_name="Hotel Breakfast/Local Cafe",
             location="Accommodation",
             cost_per_person=100,
-            cuisine="Indian"
+            cuisine="Local"
         ))
         
         # Lunch around midday
@@ -429,9 +429,9 @@ class PlannerAgent:
             type="lunch",
             time=lunch_time,
             restaurant_name="Local Restaurant",
-            location="Central Mumbai",
+            location="Near Activities",
             cost_per_person=350,
-            cuisine="Indian/International"
+            cuisine="Local"
         ))
         
         # Dinner evening
@@ -441,7 +441,7 @@ class PlannerAgent:
             restaurant_name="Restaurant/Cafe",
             location="Evening Location",
             cost_per_person=400,
-            cuisine="Indian/International"
+            cuisine="Local"
         ))
         
         return meals
