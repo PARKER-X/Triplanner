@@ -50,15 +50,15 @@ class PlannerAgent:
         constraints_dict = planning_state.constraints
         candidates = planning_state.candidates
         
-        destination = constraints_dict.get("destination", "")
-        duration_days = constraints_dict.get("duration_days", 3)
-        budget = constraints_dict.get("budget", 10000)
-        
+        destination = constraints_dict.get("destination", "") or ""
+        duration_days = constraints_dict.get("duration_days") or 3
+        budget = constraints_dict.get("budget") or 10000
+
         preferences_dict = intent_dict.get("preferences", {})
-        interests = preferences_dict.get("priorities", [])
-        
+        interests = preferences_dict.get("priorities") or []
+
         traveler_dict = intent_dict.get("traveler", {})
-        party_size = traveler_dict.get("count", 4)
+        party_size = traveler_dict.get("count") or 1
         
         # Get activities and distances
         activities_raw = candidates.get("activities", [])
@@ -84,27 +84,27 @@ class PlannerAgent:
         print(f"\n📋 Creating {duration_days}-day itinerary with location routing...")
         daily_plans = []
         
-        # Distribute activities across days
-        activities_per_day = len(activities) // duration_days
-        activity_index = 0
+        # Distribute activities across days using round-robin
+        # (ensures each day gets a diverse mix, not just leftovers on Day 3)
+        daily_activity_pools = [[] for _ in range(duration_days)]
+        for i, activity in enumerate(activities):
+            daily_activity_pools[i % duration_days].append(activity)
         
         for day_num in range(1, duration_days + 1):
             print(f"\n   Day {day_num}:")
             
-            # Get activities for this day
-            day_activities_raw = activities[
-                activity_index:activity_index + activities_per_day
-            ]
-            activity_index += activities_per_day
+            # Get this day's activity pool
+            day_activities_raw = daily_activity_pools[day_num - 1]
             
             # Create optimized day plan
             day_plan = self._create_optimized_day_plan(
                 day_num,
                 day_activities_raw,
                 distance_map,
-                budget / duration_days,
+                budget / (duration_days or 3),
                 party_size,
-                interests
+                interests,
+                destination
             )
             
             daily_plans.append(day_plan)
@@ -197,7 +197,8 @@ class PlannerAgent:
         distance_map: Dict,
         daily_budget: float,
         party_size: int,
-        interests: List[str]
+        interests: List[str],
+        destination: str = ""
     ) -> DayPlan:
         """Create a day plan with location-optimized sequencing"""
         
@@ -220,7 +221,9 @@ class PlannerAgent:
             sequenced,
             distance_map,
             daily_budget,
-            interests
+            interests,
+            destination,
+            party_size
         )
         
         # Add meals
@@ -306,7 +309,9 @@ class PlannerAgent:
         activities: List[Dict],
         distance_map: Dict,
         daily_budget: float,
-        interests: List[str]
+        interests: List[str],
+        destination: str = "",
+        party_size: int = 1
     ) -> List[DayActivity]:
         """Schedule activities with realistic travel times"""
         
@@ -314,19 +319,22 @@ class PlannerAgent:
         current_time = 9 * 60  # 9 AM in minutes
         current_cost = 0
         
-        # Reserve budget for meals (₹850 = breakfast + lunch + dinner)
-        remaining_budget = daily_budget - 850
+        # Compute per-person daily budget and reserve ₹560/person for meals
+        per_person_daily = daily_budget / max(party_size, 1)
+        remaining_budget = per_person_daily - 560  # per-person activity budget
         
         for idx, activity in enumerate(activities):
             # Check if we can fit this activity
             duration = activity.get("duration_minutes", 60)
             cost = activity.get("cost", 0)
             
-            # STRICT budget check
-            if current_cost + cost > remaining_budget * 0.8:
-                # Skip expensive activities if budget is tight
-                if cost > 300:
-                    continue
+            # Budget check: skip if this activity alone uses > 50% of remaining budget
+            # OR if cumulative cost already exceeds the activity budget
+            if current_cost >= remaining_budget:
+                break  # Day is full budget-wise
+            if current_cost + cost > remaining_budget:
+                if cost > remaining_budget * 0.5:
+                    continue  # Too expensive relative to what's left
             
             # Check time (must finish by 9 PM = 21:00)
             if current_time + duration > 21 * 60:
@@ -419,7 +427,7 @@ class PlannerAgent:
             time="08:00",
             restaurant_name="Hotel Breakfast/Local Cafe",
             location="Accommodation",
-            cost_per_person=100,
+            cost_per_person=80,
             cuisine="Local"
         ))
         
@@ -430,7 +438,7 @@ class PlannerAgent:
             time=lunch_time,
             restaurant_name="Local Restaurant",
             location="Near Activities",
-            cost_per_person=350,
+            cost_per_person=200,
             cuisine="Local"
         ))
         
@@ -440,7 +448,7 @@ class PlannerAgent:
             time="19:30",
             restaurant_name="Restaurant/Cafe",
             location="Evening Location",
-            cost_per_person=400,
+            cost_per_person=280,
             cuisine="Local"
         ))
         

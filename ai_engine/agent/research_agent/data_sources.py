@@ -174,7 +174,9 @@ class OpenStreetMapAPI:
         
         # Enrich with data
         enriched = []
-        max_per_night = (budget * 0.25) / nights / party_size
+        safe_nights = nights or 1
+        safe_party = party_size or 1
+        max_per_night = (budget * 0.25) / safe_nights / safe_party
         
         for accommodation in unique[:20]:
             enriched_acc = self._enrich_accommodation_data(accommodation, max_per_night)

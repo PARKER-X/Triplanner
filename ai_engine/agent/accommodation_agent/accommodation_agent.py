@@ -55,9 +55,9 @@ class AccommodationAgent:
                 total_nights=total_nights
             )
             
-        print("🔎 Searching for accommodations via Overpass")
+        print("🔎 Searching for accommodations via Overpass (batch query)...")
         tags = ['tourism=hotel', 'tourism=guest_house', 'tourism=hostel', 'tourism=apartment']
-        raw_results = self.overpass.search_activities(lat, lng, tags, radius_meters=5000)
+        raw_results = self.overpass.batch_search_activities(lat, lng, tags, radius_meters=5000)
         
         options: List[Accommodation] = []
         for result in raw_results:

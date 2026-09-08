@@ -23,7 +23,7 @@ class OverpassAPI:
         self.session.headers.update({
             'User-Agent': 'TripPlanner/1.0 (Educational)'
         })
-        self.request_delay = 5  # Be nice to free service
+        self.request_delay = 1  # Reduced: 1s between requests is enough
     
     def search_activities(
         self,
@@ -101,7 +101,57 @@ class OverpassAPI:
         
         print(f"   ✅ Found {len(activities)} activities")
         return activities
-    
+
+    def batch_search_activities(
+        self,
+        lat: float,
+        lng: float,
+        tags: List[str],
+        radius_meters: int = 5000
+    ) -> List[Dict]:
+        """
+        Fetch multiple OSM tags in a SINGLE Overpass request (much faster).
+        """
+        print(f"🏪 Batch querying Overpass API ({len(tags)} tags in 1 request)...")
+
+        # Build union of all tag filters
+        union_parts = []
+        for tag in tags:
+            parts = tag.split("=")
+            if len(parts) == 2:
+                key, value = parts
+                union_parts.append(f'  node["{key}"="{value}"](around:{radius_meters},{lat},{lng});')
+                union_parts.append(f'  way["{key}"="{value}"](around:{radius_meters},{lat},{lng});')
+
+        query = "[out:json];\n(\n" + "\n".join(union_parts) + "\n);\nout body geom;"
+
+        try:
+            time.sleep(self.request_delay)
+            response = self.session.post(self.base_url, data=query, timeout=45)
+            response.raise_for_status()
+            data = response.json()
+
+            activities = []
+            for element in data.get("elements", []):
+                # Determine which tag this element matched
+                elem_tags = element.get("tags", {})
+                matched_tag = "tourism=hotel"
+                for tag in tags:
+                    k, _, v = tag.partition("=")
+                    if elem_tags.get(k) == v:
+                        matched_tag = tag
+                        break
+                activity = self._parse_element(element, matched_tag)
+                if activity:
+                    activities.append(activity)
+
+            print(f"   ✅ Found {len(activities)} activities")
+            return activities
+
+        except Exception as e:
+            print(f"   ⚠️ Batch query failed: {e}, falling back to sequential")
+            return self.search_activities(lat, lng, tags, radius_meters)
+
     def _parse_element(self, element: Dict, tag: str) -> Optional[Dict]:
         """Parse Overpass element into activity format"""
         try:
@@ -111,6 +161,7 @@ class OverpassAPI:
             
             # For ways/relations, get center
             if not lat or not lon:
+
                 if "center" in element:
                     lat = element["center"].get("lat")
                     lon = element["center"].get("lon")

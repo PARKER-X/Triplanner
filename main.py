@@ -10,6 +10,12 @@ Usage:
 import sys
 import argparse
 
+# Fix Windows console encoding so emoji/Unicode prints correctly
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8")
+
 from ai_engine.core.orchestrator import Orchestrator
 from ai_engine.core.llm.groq import GroqProvider
 
@@ -102,7 +108,13 @@ def display_itinerary(state):
 
     # Accommodation
     if state.accommodation:
-        print(f"\n  🏨 Accommodation: {state.accommodation.get('name', 'N/A')}")
+        acc_name = state.accommodation.get('name', 'N/A')
+        # Replace raw OSM IDs like 'Place 5938043785' with something readable
+        if acc_name.startswith("Place "):
+            acc_type = state.accommodation.get('type', 'hotel').replace('_', ' ').title()
+            acc_area = state.accommodation.get('area', '') or state.accommodation.get('address', '')
+            acc_name = f"{acc_type} near {acc_area}" if acc_area else acc_type
+        print(f"\n  🏨 Accommodation: {acc_name}")
         print(f"     Cost: ₹{state.accommodation.get('cost_per_night', 0)}/night")
         print(f"     Area: {state.accommodation.get('area', 'N/A')}")
 

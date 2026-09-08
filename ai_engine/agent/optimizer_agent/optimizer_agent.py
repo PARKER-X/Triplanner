@@ -229,5 +229,15 @@ class OptimizerAgent:
             planning_state.optimization_result = result.model_dump()
         else:
             setattr(planning_state, 'optimization_result', result.model_dump())
-            
+
+        # Merge display fields from selected_plan so summary stats show correctly
+        if planning_state.optimization_result and planning_state.selected_plan:
+            sp = planning_state.selected_plan
+            planning_state.optimization_result["trip_title"] = sp.get("trip_title", "Trip Itinerary")
+            planning_state.optimization_result["trip_summary"] = sp.get("trip_summary", "")
+            planning_state.optimization_result["stats"] = sp.get("stats", {})
+            planning_state.optimization_result["highlights"] = sp.get("highlights", [])
+            planning_state.optimization_result["tips"] = sp.get("tips", [])
+            planning_state.optimization_result["warnings"] = sp.get("warnings", [])
+
         return result

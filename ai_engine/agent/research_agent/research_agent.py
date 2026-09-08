@@ -52,17 +52,17 @@ class ResearchAgent:
         constraints_dict = planning_state.constraints  # This is a dict
         
         # Extract fields from intent_dict
-        destination = constraints_dict.get("destination", "")
-        duration_days = constraints_dict.get("duration_days", 3)
-        budget = constraints_dict.get("budget", 10000)
-        
+        destination = constraints_dict.get("destination", "") or ""
+        duration_days = constraints_dict.get("duration_days") or 3
+        budget = constraints_dict.get("budget") or 10000
+
         # Get preferences from intent_dict
         preferences_dict = intent_dict.get("preferences", {})
-        interests = preferences_dict.get("priorities", [])
-        
+        interests = preferences_dict.get("priorities") or []
+
         # Get traveler info from intent_dict
         traveler_dict = intent_dict.get("traveler", {})
-        party_size = traveler_dict.get("count", 4)
+        party_size = traveler_dict.get("count") or 1
         
         print("\n" + "="*80)
         print(f"🔍 RESEARCH AGENT: Searching for activities in {destination}")
@@ -83,24 +83,30 @@ class ResearchAgent:
         osm_tags = self._map_interests_to_osm_tags(interests)
         print(f"\n🏪 Searching for activities with tags: {osm_tags[:3]}...")  # Show first 3
         
-        raw_activities = self.overpass.search_activities(lat, lng, osm_tags, radius_meters=5000)
+        raw_activities = self.overpass.batch_search_activities(lat, lng, osm_tags, radius_meters=5000)
         
         if not raw_activities:
             print("⚠️ No activities found, trying broader search...")
-            raw_activities = self.overpass.search_activities(
+            raw_activities = self.overpass.batch_search_activities(
                 lat, lng,
                 ["amenity=restaurant", "tourism=museum", "leisure=park"],
                 radius_meters=5000
             )
+
         
         print(f"📊 Found {len(raw_activities)} raw activities from OpenStreetMap")
         
-        # Step 3: Enrich with Wikipedia
-        print("\n📚 Enriching with Wikipedia data...")
-        enriched_activities = self._enrich_activities(raw_activities)
+        # Step 3: Pre-filter to named places only, take top 30 before expensive Wikipedia calls
+        named = [a for a in raw_activities if not a.get("name", "").startswith("Place ")]
+        top_raw = named[:30] if named else raw_activities[:30]
+        print(f"   Pre-selected {len(top_raw)} named candidates for Wikipedia enrichment")
+        
+        # Step 4: Enrich only top candidates with Wikipedia
+        print("\n📚 Enriching top candidates with Wikipedia data...")
+        enriched_activities = self._enrich_activities(top_raw)
         print(f"   Enriched {len(enriched_activities)} activities")
         
-        # Step 4: Filter by constraints
+        # Step 5: Filter by constraints
         print("\n⚖️ Filtering by constraints...")
         filtered_activities = self._filter_by_constraints(
             enriched_activities,
@@ -113,8 +119,9 @@ class ResearchAgent:
         print(f"✅ {len(filtered_activities)} activities match constraints")
         
         if not filtered_activities:
-            print("⚠️ No activities match constraints, returning all activities")
+            print("⚠️ No activities match constraints, returning all enriched activities")
             filtered_activities = enriched_activities[:20]  # Return top 20
+
         
         # Step 5: Calculate distances
         print("\n📍 Calculating distances between activities...")
@@ -155,7 +162,7 @@ class ResearchAgent:
         return result
     
     def _map_interests_to_osm_tags(self, interests: List[str]) -> List[str]:
-        """Map user interests to OpenStreetMap tags"""
+        """Map user interests to OpenStreetMap tags using substring matching"""
         
         mapping = {
             "food": [
@@ -170,6 +177,13 @@ class ResearchAgent:
                 "tourism=art_gallery",
                 "historic=monument",
                 "amenity=library"
+            ],
+            "cultural": [
+                "tourism=museum",
+                "tourism=art_gallery",
+                "historic=monument",
+                "historic=building",
+                "tourism=attraction"
             ],
             "nature": [
                 "leisure=park",
@@ -192,14 +206,27 @@ class ResearchAgent:
                 "shop=mall",
                 "shop=market",
                 "shop=supermarket"
+            ],
+            "iconic": [
+                "tourism=attraction",
+                "tourism=museum",
+                "historic=monument",
+                "tourism=viewpoint"
+            ],
+            "attraction": [
+                "tourism=attraction",
+                "tourism=museum",
+                "historic=monument"
             ]
         }
         
         tags = []
         for interest in interests:
             interest_lower = interest.lower().strip()
-            if interest_lower in mapping:
-                tags.extend(mapping[interest_lower])
+            # Use substring matching so 'authentic food experiences' matches 'food'
+            for key, key_tags in mapping.items():
+                if key in interest_lower:
+                    tags.extend(key_tags)
         
         # Remove duplicates
         unique_tags = list(set(tags))
@@ -258,8 +285,10 @@ class ResearchAgent:
         
         filtered = []
         
-        # Daily budget per person
-        daily_budget_per_person = budget / duration_days / party_size
+        # Daily budget per person — guard against None/zero divisors
+        safe_days = duration_days or 3
+        safe_party = party_size or 1
+        daily_budget_per_person = budget / safe_days / safe_party
         
         print(f"   Daily per person: ₹{daily_budget_per_person:.0f}")
         print(f"   Interests: {interests}")
@@ -304,7 +333,7 @@ class ResearchAgent:
         return filtered
     
     def _get_matching_interests(self, activity: Activity, interests: List[str]) -> List[str]:
-        """Match interests PROPERLY - not just category"""
+        """Match interests using substring matching — handles phrases like 'authentic food experiences'"""
         
         category_interest_map = {
             # FOOD
@@ -316,13 +345,14 @@ class ResearchAgent:
             "market": ["food"],
             
             # CULTURE - QUALITY PLACES ONLY
-            "museum": ["culture"],
-            "art_gallery": ["culture"],
-            "monument": ["culture"],
-            "historical_building": ["culture"],
+            "museum": ["culture", "cultural", "iconic"],
+            "art_gallery": ["culture", "cultural"],
+            "monument": ["culture", "cultural", "iconic"],
+            "historical_building": ["culture", "cultural"],
             "library": ["culture"],
-            "temple": ["culture"],
-            "church": ["culture"],
+            "temple": ["culture", "cultural"],
+            "church": ["culture", "cultural"],
+            "attraction": ["iconic", "attraction"],
             
             # RELAXATION
             "park": ["relaxation", "nature"],
@@ -330,7 +360,7 @@ class ResearchAgent:
             "swimming_pool": ["relaxation"],
             "spa": ["relaxation"],
             "beach": ["relaxation", "nature"],
-            "viewpoint": ["relaxation", "nature"]
+            "viewpoint": ["relaxation", "nature", "iconic"]
         }
         
         matches = []
@@ -338,10 +368,14 @@ class ResearchAgent:
         # Check category match
         category_lower = activity.category.lower()
         if category_lower in category_interest_map:
-            potential_matches = category_interest_map[category_lower]
+            potential_interest_keys = category_interest_map[category_lower]
             for interest in interests:
-                if interest.lower() in potential_matches:
-                    matches.append(interest)
+                interest_lower = interest.lower()
+                # Substring match: 'authentic food experiences' contains 'food'
+                for key in potential_interest_keys:
+                    if key in interest_lower:
+                        matches.append(interest)
+                        break
         
         return list(set(matches))  # Remove duplicates
     
