@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -716,49 +716,71 @@
 
     function showResult(plan, timing, stages) {
       const section = document.getElementById('result-section');
-      const title = plan.trip_title || 'Your Trip';
-      const summary = plan.trip_summary || '';
-      const days = plan.days || [];
-      const stats = plan.stats || {};
-      const warnings = plan.warnings || [];
 
-      // Stats row
+      // ── Normalise plan shape ──────────────────────────────────────────────
+      // The backend returns optimization_result whose top-level keys are:
+      //   days (OptimizedDayPlan[]), trip_title, trip_summary, stats, warnings
+      // Meals live on the planner's selected_plan days, not the optimizer days.
+      // We merge both so the UI always has something to show.
+
+      const title    = plan.trip_title   || plan.destination || 'Your Trip';
+      const summary  = plan.trip_summary || '';
+      const days     = plan.days         || [];
+      const stats    = plan.stats        || {};
+      const warnings = plan.warnings     || [];
+
+      // Debug: if days is empty log the raw plan so we can diagnose
+      if (!days.length) {
+        console.warn('showResult: plan.days is empty. Raw plan:', JSON.stringify(plan, null, 2));
+      }
+
+      // ── Stats row ─────────────────────────────────────────────────────────
+      const totalActs  = stats.total_activities ?? days.reduce((s,d)=>(d.activities||[]).length+s, 0);
+      const totalCost  = stats.total_cost       ?? days.reduce((s,d)=>s+(d.total_cost||0), 0);
+      const totalKm    = stats.total_walking_km ?? days.reduce((s,d)=>s+(d.total_walking_km||0), 0);
+      const freeActs   = stats.free_activities  ?? 0;
+
       const statsHtml = `
         <div class="stats-row">
-          ${stats.total_activities ? `<div class="stat-chip"><span>🎯</span>${stats.total_activities} Activities</div>` : ''}
-          ${stats.total_cost ? `<div class="stat-chip"><span>💰</span>₹${Math.round(stats.total_cost)} Total</div>` : ''}
-          ${stats.total_walking_km ? `<div class="stat-chip"><span>🚶</span>${parseFloat(stats.total_walking_km).toFixed(1)}km Walking</div>` : ''}
-          ${stats.free_activities ? `<div class="stat-chip"><span>🎁</span>${stats.free_activities} Free Activities</div>` : ''}
+          ${totalActs  ? `<div class="stat-chip"><span>🎯</span>${totalActs} Activities</div>` : ''}
+          ${totalCost  ? `<div class="stat-chip"><span>💰</span>₹${Math.round(totalCost)} Total</div>` : ''}
+          ${totalKm    ? `<div class="stat-chip"><span>🚶</span>${parseFloat(totalKm).toFixed(1)}km Walking</div>` : ''}
+          ${freeActs   ? `<div class="stat-chip"><span>🎁</span>${freeActs} Free Activities</div>` : ''}
           ${days.length ? `<div class="stat-chip"><span>📅</span>${days.length} Days</div>` : ''}
         </div>
       `;
 
-      // Day cards
-      const daysHtml = days.map(day => {
-        const acts = (day.activities || []).map(act => {
-          const name = act.activity_name || act.name || 'Activity';
-          const cost = act.cost_per_person;
-          const costTag = cost > 0
+      // ── Day cards ─────────────────────────────────────────────────────────
+      const daysHtml = days.length ? days.map(day => {
+        const activities = day.activities || [];
+        const actsHtml = activities.map(act => {
+          // Support both optimizer keys (activity_name) and planner keys (name)
+          const name     = act.activity_name || act.name || 'Activity';
+          const cost     = act.cost_per_person ?? 0;
+          const costTag  = cost > 0
             ? `<span class="tag cost">₹${cost}/person</span>`
             : `<span class="tag free">FREE</span>`;
-          const durationTag = act.duration_minutes
+          const durTag   = act.duration_minutes
             ? `<span class="tag duration">⏱ ${act.duration_minutes}min</span>` : '';
-          const catTag = act.category
+          const catTag   = act.category
             ? `<span class="tag">${act.category}</span>` : '';
-          const why = act.why_included ? `<div class="activity-why">💡 ${act.why_included}</div>` : '';
+          const why      = act.why_included
+            ? `<div class="activity-why">💡 ${act.why_included}</div>` : '';
           return `
             <div class="activity-item">
               <div class="activity-time">${act.time_start || ''}</div>
               <div class="activity-body">
                 <div class="activity-name">${name}</div>
-                <div class="activity-tags">${costTag}${durationTag}${catTag}</div>
+                <div class="activity-tags">${costTag}${durTag}${catTag}</div>
                 ${why}
               </div>
             </div>
           `;
         }).join('');
 
-        const meals = (day.meals || []).map(m => `
+        // Meals: optimizer days don't carry meals; they may be passed separately
+        const meals = day.meals || [];
+        const mealsHtml = meals.map(m => `
           <div class="meal-item">
             <div class="meal-type">${m.type || 'Meal'}</div>
             <div class="meal-name">${m.restaurant_name || ''}</div>
@@ -766,10 +788,10 @@
           </div>
         `).join('');
 
-        const mealsSection = meals ? `
+        const mealsSection = mealsHtml ? `
           <div class="meals-section">
             <div class="meals-title">🍽️ Meals</div>
-            ${meals}
+            ${mealsHtml}
           </div>
         ` : '';
 
@@ -783,15 +805,24 @@
               <div class="day-meta">
                 <span>💰 ₹${Math.round(day.total_cost || 0)}</span>
                 <span>🚶 ${parseFloat(day.total_walking_km || 0).toFixed(1)}km</span>
+                <span>🎯 ${activities.length} stops</span>
               </div>
             </div>
-            <div class="activities-list">${acts}</div>
+            <div class="activities-list">${actsHtml || '<div style="color:var(--text-dim);padding:12px 0;font-size:.85rem">No activities scheduled for this day.</div>'}</div>
             ${mealsSection}
           </div>
         `;
-      }).join('');
+      }).join('') : `
+        <div class="error-card" style="background:rgba(245,158,11,0.05);border-color:rgba(245,158,11,0.2)">
+          <div class="error-icon">⚠️</div>
+          <div class="error-title" style="color:var(--gold)">Itinerary Generated — Display Error</div>
+          <div class="error-msg">The plan was created but could not be displayed. Please try again or check the browser console for details.</div>
+          <br/>
+          <button class="new-plan-btn" onclick="resetUI()">← Try Again</button>
+        </div>
+      `;
 
-      // Timing
+      // ── Timing bars ───────────────────────────────────────────────────────
       let timingHtml = '';
       if (timing) {
         const filtered = Object.entries(timing).filter(([k]) => k !== 'total');
@@ -811,6 +842,7 @@
         `;
       }
 
+      // ── Warnings ──────────────────────────────────────────────────────────
       const warnHtml = warnings.length ? `
         <div class="timing-section" style="border-color:rgba(245,158,11,0.25);background:rgba(245,158,11,0.04)">
           <div class="timing-title" style="color:var(--gold)">⚠️ Warnings</div>
@@ -818,6 +850,7 @@
         </div>
       ` : '';
 
+      // ── Render ────────────────────────────────────────────────────────────
       document.getElementById('result-content').innerHTML = `
         <div class="result-header">
           <div>
@@ -836,6 +869,7 @@
       // Scroll to result
       section.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
+
   </script>
 </body>
 </html>
