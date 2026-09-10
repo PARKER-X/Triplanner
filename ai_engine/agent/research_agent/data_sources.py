@@ -29,7 +29,7 @@ class OpenStreetMapAPI:
         
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'TripPlanner/1.0 (Educational Project)'
+            'User-Agent': 'TripPlanner/1.0 (Educational Project; contact: harshrawart096@gmail.com)'
         })
     
     def search_places(
