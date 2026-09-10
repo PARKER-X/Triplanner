@@ -10,7 +10,11 @@ Pipeline:
 """
 
 import time
+import traceback
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from ai_engine.schemas.planning_state import PlanningState
 from ai_engine.agent.intent_agent.intent_agent import IntentAgent
@@ -255,10 +259,17 @@ class Orchestrator:
             state.add_error(stage_name, error_msg)
             state.timing[stage_name] = round(duration, 2)
             self._log(f"   ❌ Error in {stage_name}: {error_msg}")
+            # Log full traceback so it's visible in uvicorn/server logs
+            logger.error(
+                "Stage '%s' failed:\n%s", stage_name, traceback.format_exc()
+            )
 
         return state
 
     def _log(self, message: str):
-        """Print log message if verbose mode is on."""
+        """Print log message if verbose mode is on — always also write to logger."""
         if self.verbose:
             print(message)
+        # Always emit through logging so messages appear in uvicorn/gunicorn logs
+        # even when stdout is captured or redirected (e.g. cloud deploy).
+        logger.info(message)

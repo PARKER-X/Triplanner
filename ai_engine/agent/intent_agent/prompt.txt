@@ -28,6 +28,14 @@ Rules:
 6. For preferences.priorities, always return an array. Use [] if no priorities are mentioned.
 7. For missing_information, return a list of required details that are not available.
 8. Return valid JSON only. Do not include explanations, markdown, or extra text.
+9. **CRITICAL — destination field**: If the user mentions specific cities within a region/state,
+   capture ALL the city names as the destination, NOT the region name.
+   Examples:
+     - "Rajasthan covering Jaipur and Jodhpur" → destination: "Jaipur and Jodhpur"
+     - "Kerala backwaters — Kochi, Alleppey, Munnar" → destination: "Kochi, Alleppey and Munnar"
+     - "Maharashtra — Mumbai" → destination: "Mumbai"
+     - "5 days in Goa" → destination: "Goa"  (no cities specified, keep the region)
+   Only use the region name when NO specific cities are mentioned.
 
 
 Output JSON schema:
@@ -93,6 +101,39 @@ Output:
     "destination": "Japan",
     "duration_days": 10,
     "start_date": "15 March"
+  },
+
+  "missing_information": []
+}
+
+
+Example with multi-city destination:
+
+User:
+"Family of 5, 5 days in Rajasthan covering Jaipur and Jodhpur, ₹40,000"
+
+Output:
+
+{
+  "goal_type": "travel",
+
+  "traveler": {
+    "type": "family",
+    "count": 5
+  },
+
+  "preferences": {
+    "travel_style": null,
+    "priorities": [],
+    "avoid": []
+  },
+
+  "constraints": {
+    "source": null,
+    "budget": 40000,
+    "destination": "Jaipur and Jodhpur",
+    "duration_days": 5,
+    "start_date": null
   },
 
   "missing_information": []

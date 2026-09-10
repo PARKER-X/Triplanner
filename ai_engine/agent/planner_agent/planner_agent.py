@@ -71,8 +71,10 @@ class PlannerAgent:
         print(f"   Interests: {interests}")
         
         if not activities_raw:
-            print("❌ No activities available")
-            return self._create_empty_result(destination, duration_days)
+            print("⚠️ No OSM activities found — using LLM knowledge-based fallback")
+            return self._create_llm_fallback_plan(
+                planning_state, destination, duration_days, budget, party_size, interests
+            )
         
         # Convert activities
         activities = self._convert_activities(activities_raw)
@@ -650,7 +652,175 @@ class PlannerAgent:
         
         return warnings
     
-    def _create_empty_result(self, destination: str, duration: int) -> PlannerResult:
+    def _create_llm_fallback_plan(
+        self,
+        planning_state,
+        destination: str,
+        duration_days: int,
+        budget: float,
+        party_size: int,
+        interests: List[str],
+    ) -> "PlannerResult":
+        """
+        Generate a full itinerary using LLM world knowledge when OSM returns 0 activities.
+        Produces real day cards the UI can render.
+        """
+        interests_str = ", ".join(interests) if interests else "sightseeing, local cuisine"
+        daily_budget = round(budget / max(duration_days, 1) / max(party_size, 1))
+
+        system_prompt = (
+            "You are an expert travel itinerary planner with deep knowledge of Indian tourism. "
+            "Return ONLY valid JSON — no markdown, no extra text."
+        )
+
+        user_prompt = f"""Create a detailed {duration_days}-day trip itinerary for {destination}.
+
+Trip details:
+- Party: {party_size} people
+- Total budget: ₹{budget}
+- Daily budget per person: ₹{daily_budget}
+- Interests: {interests_str}
+
+Return this exact JSON structure (no markdown fences):
+{{
+  "trip_title": "string",
+  "trip_summary": "string (2-3 sentences)",
+  "days": [
+    {{
+      "day_number": 1,
+      "theme": "string (e.g. Forts & Palaces of Jaipur)",
+      "activities": [
+        {{
+          "sequence": 1,
+          "time_start": "09:00",
+          "time_end": "11:30",
+          "activity_name": "string",
+          "category": "string (fort/museum/restaurant/temple/market/etc)",
+          "location": "string (area/neighbourhood)",
+          "address": "string",
+          "cost_per_person": 0,
+          "duration_minutes": 90,
+          "description": "string (1-2 sentences)",
+          "why_included": "string (why this suits the traveler)"
+        }}
+      ],
+      "meals": [
+        {{
+          "type": "breakfast",
+          "time": "08:00",
+          "restaurant_name": "string",
+          "location": "string",
+          "cost_per_person": 150,
+          "cuisine": "string"
+        }}
+      ],
+      "total_cost": 0,
+      "total_walking_km": 4.5,
+      "notes": "string"
+    }}
+  ],
+  "warnings": []
+}}
+
+Rules:
+- Include 3-5 activities per day (real, well-known places).
+- Include breakfast, lunch, dinner for each day.
+- Respect the budget: activities + meals total_cost per day ≤ ₹{daily_budget * party_size}.
+- Spread activities across the destination's key areas.
+- Make it genuinely useful and accurate — do NOT invent fake places.
+- All numeric fields must be numbers (not strings).
+"""
+
+        try:
+            print("🤖 Calling LLM for knowledge-based itinerary...")
+            raw = self.llm.generate(system_prompt, user_prompt)
+            data = json.loads(raw)
+
+            days_data = data.get("days", [])
+            days: List[DayPlan] = []
+
+            for d in days_data:
+                acts = []
+                for a in d.get("activities", []):
+                    acts.append(DayActivity(
+                        sequence=a.get("sequence", 1),
+                        time_start=a.get("time_start", "09:00"),
+                        time_end=a.get("time_end", "10:00"),
+                        activity_id=f"llm_{a.get('sequence', 1)}_{d.get('day_number', 1)}",
+                        activity_name=a.get("activity_name", "Activity"),
+                        category=a.get("category", "attraction"),
+                        location=a.get("location", destination),
+                        address=a.get("address", ""),
+                        cost_per_person=float(a.get("cost_per_person", 0)),
+                        duration_minutes=int(a.get("duration_minutes", 60)),
+                        description=a.get("description", ""),
+                        why_included=a.get("why_included", ""),
+                    ))
+
+                meals = []
+                for m in d.get("meals", []):
+                    meals.append(Meal(
+                        type=m.get("type", "meal"),
+                        time=m.get("time", "12:00"),
+                        restaurant_name=m.get("restaurant_name", "Local Restaurant"),
+                        location=m.get("location", destination),
+                        cost_per_person=float(m.get("cost_per_person", 200)),
+                        cuisine=m.get("cuisine", "Indian"),
+                    ))
+
+                total_cost = float(d.get("total_cost") or sum(a.cost_per_person for a in acts) + sum(m.cost_per_person for m in meals))
+
+                days.append(DayPlan(
+                    day_number=d.get("day_number", len(days) + 1),
+                    theme=d.get("theme", "Exploration"),
+                    activities=acts,
+                    meals=meals,
+                    total_activities=len(acts),
+                    total_cost=total_cost * party_size,
+                    total_walking_km=float(d.get("total_walking_km", 4.0)),
+                    estimated_steps=int(float(d.get("total_walking_km", 4.0)) * 1400),
+                    rest_hours=8.0,
+                    notes=d.get("notes", ""),
+                ))
+
+            total_cost_all = sum(day.total_cost for day in days)
+            stats = ItineraryStats(
+                total_activities=sum(len(day.activities) for day in days),
+                total_cost=total_cost_all,
+                total_walking_km=sum(day.total_walking_km for day in days),
+                average_daily_cost=total_cost_all / max(len(days), 1),
+                estimated_total_steps=sum(day.estimated_steps for day in days),
+                average_daily_walking_km=sum(day.total_walking_km for day in days) / max(len(days), 1),
+                free_activities=sum(1 for day in days for act in day.activities if act.cost_per_person == 0),
+                paid_activities=sum(1 for day in days for act in day.activities if act.cost_per_person > 0),
+                interest_distribution={},
+                neighborhood_distribution={},
+            )
+
+            result = PlannerResult(
+                trip_title=data.get("trip_title", f"{duration_days}-Day {destination} Trip"),
+                trip_summary=data.get("trip_summary", ""),
+                destination=destination,
+                duration_days=duration_days,
+                days=days,
+                stats=stats,
+                highlights=[],
+                tips=self._generate_tips(destination),
+                warnings=data.get("warnings", ["Note: This itinerary was generated from AI world knowledge since live POI data was unavailable."]),
+            )
+
+            # Store in planning state so optimizer/critic can use it
+            planning_state.plans = [day.model_dump() for day in days]
+            planning_state.selected_plan = result.model_dump()
+
+            print(f"✅ LLM fallback: created {len(days)}-day itinerary with {stats.total_activities} activities")
+            return result
+
+        except Exception as e:
+            print(f"❌ LLM fallback failed: {e}")
+            return self._create_empty_result(destination, duration_days)
+
+    def _create_empty_result(self, destination: str, duration: int) -> "PlannerResult":
         """Create empty result"""
         
         return PlannerResult(
@@ -674,4 +844,4 @@ class PlannerAgent:
             highlights=[],
             tips=[],
             warnings=["No activities found"]
-        )
+        )

@@ -1,7 +1,10 @@
 import time
 import math
+import logging
 from typing import List, Dict, Any
 from .schema import OptimizedActivity, OptimizedDayPlan, OptimizationStats, OptimizationResult
+
+logger = logging.getLogger(__name__)
 
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371.0 # Earth radius in km
@@ -14,7 +17,9 @@ def haversine(lat1, lon1, lat2, lon2):
 
 class OptimizerAgent:
     def __init__(self):
-        print('✅ Optimizer Agent initialized (Two-Stage: DP + Local Search)')
+        msg = '✅ Optimizer Agent initialized (Two-Stage: DP + Local Search)'
+        print(msg)
+        logger.info(msg)
 
     def _extract_coords(self, activity_dict):
         # Planner DayActivity dicts have no 'coordinates' key — coords were

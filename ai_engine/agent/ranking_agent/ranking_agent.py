@@ -11,8 +11,12 @@ Key insight: Wikipedia presence = the place is actually famous.
 A swimming pool with no Wikipedia page is NOT a tourist attraction.
 """
 
+import logging
 from typing import List, Dict, Optional
 from ai_engine.agent.research_agent.schema import Activity
+
+logger = logging.getLogger(__name__)
+
 
 
 class RankingAgent:
@@ -56,7 +60,9 @@ class RankingAgent:
     }
 
     def __init__(self):
-        print("✅ Ranking Agent initialized (fame-weighted, landmark-first)")
+        msg = "✅ Ranking Agent initialized (fame-weighted, landmark-first)"
+        print(msg)
+        logger.info(msg)
 
     def run(self, planning_state) -> None:
         """
@@ -68,10 +74,12 @@ class RankingAgent:
         candidates = planning_state.candidates.get("activities", [])
 
         if not candidates:
-            print("⚠️  No candidates to rank")
+            msg = "⚠️  No candidates to rank"
+            print(msg); logger.warning(msg)
             return planning_state
 
-        print(f"\n🏆 RANKING AGENT: Curating {len(candidates)} activities...")
+        msg = f"\n🏆 RANKING AGENT: Curating {len(candidates)} activities..."
+        print(msg); logger.info(msg)
 
         # Convert dicts to Activity objects
         activities = []
@@ -96,12 +104,17 @@ class RankingAgent:
 
         # Report
         cats = self._count_categories(curated)
-        print(f"   ✅ Curated to {len(curated)} activities for {duration_days}-day trip")
-        print(f"      🏛️ Landmarks: {cats['landmarks']}")
-        print(f"      🍽️ Food/Cafe: {cats['food']}")
-        print(f"      🎭 Cultural:  {cats['cultural']}")
-        print(f"      🌳 Nature:    {cats['nature']}")
-        print(f"      📍 Other:     {cats['other']}")
+        lines = [
+            f"   ✅ Curated to {len(curated)} activities for {duration_days}-day trip",
+            f"      🏛️ Landmarks: {cats['landmarks']}",
+            f"      🍽️ Food/Cafe: {cats['food']}",
+            f"      🎭 Cultural:  {cats['cultural']}",
+            f"      🌳 Nature:    {cats['nature']}",
+            f"      📍 Other:     {cats['other']}",
+        ]
+        for line in lines:
+            print(line)
+            logger.info(line)
 
         return planning_state
 

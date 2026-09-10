@@ -2,17 +2,19 @@
 AI Trip Planner - FastAPI Backend
 """
 import sys
-import io
 import os
 import logging
 import concurrent.futures
 
-# Fix Windows charmap error — force stdout/stderr to UTF-8
-# so emoji in orchestrator logs (rocket, checkmarks, etc.) don't crash the process
-if sys.stdout and hasattr(sys.stdout, 'buffer'):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-if sys.stderr and hasattr(sys.stderr, 'buffer'):
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+# Force UTF-8 on stdout/stderr so emoji in agent logs don't crash on Windows.
+# reconfigure() is safe even when stdout has no .buffer (e.g. uvicorn capture mode).
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, 'reconfigure'):
+        try:
+            _stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass  # stream is not reconfigurable (e.g. already redirected) — ignore
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -23,8 +25,20 @@ from pydantic import BaseModel
 from ai_engine.core.orchestrator import Orchestrator
 from ai_engine.core.llm.groq import GroqProvider
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 logger = logging.getLogger(__name__)
+
+# Route all agent print() calls through logging so they always appear
+# in uvicorn logs even when stdout is not a real TTY (deployed environments).
+_builtin_print = print
+def print(*args, **kwargs):  # noqa: A001
+    kwargs.pop('file', None)  # always write to logger, not a custom file
+    msg = ' '.join(str(a) for a in args)
+    logging.getLogger('agent').info(msg)
 
 app = FastAPI(
     title="AI Trip Planner",
