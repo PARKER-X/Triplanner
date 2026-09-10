@@ -89,7 +89,19 @@ def create_plan(request: PlanRequest):
                 )
 
         if state.current_stage == "done":
-            plan = state.optimization_result or state.selected_plan
+            # Prefer optimizer result when it has days; fall back to planner result
+            opt = state.optimization_result
+            plan = opt if (opt and opt.get("days")) else state.selected_plan
+
+            # Merge meals from planner days into optimizer days
+            # (optimizer drops meals; planner always has them)
+            if plan is opt and opt.get("days") and state.selected_plan.get("days"):
+                planner_days = {d["day_number"]: d for d in state.selected_plan["days"]}
+                for day in plan["days"]:
+                    dn = day.get("day_number")
+                    if dn in planner_days and not day.get("meals"):
+                        day["meals"] = planner_days[dn].get("meals", [])
+
             return {
                 "success": True,
                 "itinerary": plan,

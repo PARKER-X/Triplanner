@@ -17,9 +17,18 @@ class OptimizerAgent:
         print('✅ Optimizer Agent initialized (Two-Stage: DP + Local Search)')
 
     def _extract_coords(self, activity_dict):
+        # Planner DayActivity dicts have no 'coordinates' key — coords were
+        # stripped during _convert_activities and are not stored on the
+        # scheduled activity.  Try nested dict first, then fall back to
+        # top-level lat/lng (research schema), then give up with (0, 0).
         if 'coordinates' in activity_dict:
-            return activity_dict['coordinates'].get('lat', 0), activity_dict['coordinates'].get('lng', 0)
-        return 0, 0
+            c = activity_dict['coordinates']
+            if isinstance(c, dict):
+                return c.get('lat', 0), c.get('lng', 0)
+        # Flat lat/lng (research Activity after model_dump)
+        lat = activity_dict.get('lat', activity_dict.get('latitude', 0))
+        lng = activity_dict.get('lng', activity_dict.get('longitude', 0))
+        return lat or 0, lng or 0
 
     def _resequence_activities(self, activities: List[Dict]) -> List[Dict]:
         if not activities:
@@ -225,19 +234,23 @@ class OptimizerAgent:
             warnings=[]
         )
         
-        if hasattr(planning_state, 'optimization_result'):
-            planning_state.optimization_result = result.model_dump()
-        else:
-            setattr(planning_state, 'optimization_result', result.model_dump())
+        result_dict = result.model_dump()
 
-        # Merge display fields from selected_plan so summary stats show correctly
-        if planning_state.optimization_result and planning_state.selected_plan:
-            sp = planning_state.selected_plan
-            planning_state.optimization_result["trip_title"] = sp.get("trip_title", "Trip Itinerary")
-            planning_state.optimization_result["trip_summary"] = sp.get("trip_summary", "")
-            planning_state.optimization_result["stats"] = sp.get("stats", {})
-            planning_state.optimization_result["highlights"] = sp.get("highlights", [])
-            planning_state.optimization_result["tips"] = sp.get("tips", [])
-            planning_state.optimization_result["warnings"] = sp.get("warnings", [])
+        # Only store optimization_result when we actually have days.
+        # An empty dict/list here would be truthy and shadow selected_plan
+        # in the API's `optimization_result or selected_plan` fallback.
+        if opt_days:
+            # Merge display fields from selected_plan so summary stats show correctly
+            if planning_state.selected_plan:
+                sp = planning_state.selected_plan
+                result_dict["trip_title"]   = sp.get("trip_title", "Trip Itinerary")
+                result_dict["trip_summary"] = sp.get("trip_summary", "")
+                result_dict["stats"]        = sp.get("stats", {})
+                result_dict["highlights"]   = sp.get("highlights", [])
+                result_dict["tips"]         = sp.get("tips", [])
+                result_dict["warnings"]     = sp.get("warnings", [])
+
+            planning_state.optimization_result = result_dict
+        # else: leave optimization_result as empty dict so selected_plan is used
 
         return result
