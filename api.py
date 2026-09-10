@@ -1,10 +1,11 @@
-﻿"""
+"""
 AI Trip Planner - FastAPI Backend
 """
 import sys
 import io
 import os
 import logging
+import concurrent.futures
 
 # Fix Windows charmap error — force stdout/stderr to UTF-8
 # so emoji in orchestrator logs (rocket, checkmarks, etc.) don't crash the process
@@ -65,9 +66,28 @@ def create_plan(request: PlanRequest):
     if not request.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
     logger.info(f"Planning request: {request.query[:80]}")
+
+    # Hard wall-clock limit: 5 minutes. Prevents a single hung TCP connection
+    # (e.g. Groq / Overpass timeout) from freezing the server worker indefinitely.
+    PLAN_TIMEOUT_SECONDS = 300
+
     try:
         orchestrator = get_orchestrator()
-        state = orchestrator.run(request.query.strip())
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(orchestrator.run, request.query.strip())
+            try:
+                state = future.result(timeout=PLAN_TIMEOUT_SECONDS)
+            except concurrent.futures.TimeoutError:
+                logger.error("Pipeline exceeded %ds wall-clock limit", PLAN_TIMEOUT_SECONDS)
+                raise HTTPException(
+                    status_code=504,
+                    detail=(
+                        f"Planning timed out after {PLAN_TIMEOUT_SECONDS}s. "
+                        "External APIs (Groq, OpenStreetMap) may be slow — please try again."
+                    ),
+                )
+
         if state.current_stage == "done":
             plan = state.optimization_result or state.selected_plan
             return {
@@ -84,14 +104,14 @@ def create_plan(request: PlanRequest):
                 "timing": state.timing,
                 "stages": state.completed_stages,
             }
+    except HTTPException:
+        raise  # Re-raise FastAPI exceptions as-is
     except UnicodeEncodeError as e:
-        # Swallow encoding errors from console logging — pipeline still ran
         logger.warning(f"Unicode logging error (non-fatal): {e}")
-        state = getattr(e, '__context__', None)
         raise HTTPException(status_code=500, detail=f"Unicode encoding error in pipeline output: {e}")
     except Exception as e:
         logger.exception("Unexpected error during planning")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
 
 if os.path.exists("ui"):
     app.mount("/ui", StaticFiles(directory="ui"), name="ui")

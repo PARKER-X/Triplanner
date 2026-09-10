@@ -101,12 +101,10 @@ class Orchestrator:
         # ── Stage 3: Research ──────────────────────────────
         state = self._run_stage(state, "research", self._stage_research)
 
-        # Check if we have candidates
+        # Warn if research came back empty, but don't abort — let planner handle it gracefully
         if not state.candidates.get("activities"):
-            state.add_error("research", "No activities found")
-            state.current_stage = "failed"
-            self._log("❌ Pipeline failed: No activities found")
-            return state
+            state.add_error("research", "No activities found — pipeline will continue with limited data")
+            self._log("⚠️ Research returned 0 activities; continuing pipeline with best-effort data")
 
         # ── Stage 4: Ranking ───────────────────────────────
         state = self._run_stage(state, "ranking", self._stage_ranking)

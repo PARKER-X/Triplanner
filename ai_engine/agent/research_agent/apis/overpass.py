@@ -4,26 +4,48 @@ Free, no API key needed!
 This is the BEST for finding specific POIs (points of interest)
 """
 
-import requests
-from typing import List, Dict, Optional
+import logging
 import time
+from typing import List, Dict, Optional
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+logger = logging.getLogger(__name__)
+
+_CONNECT_TIMEOUT = 5    # seconds to establish TCP connection
+_READ_TIMEOUT = 30      # seconds to wait for the response body
+
+
+def _make_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update({"User-Agent": "TripPlanner/1.0 (Educational)"})
+    retry = Retry(
+        total=2,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["POST", "GET"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 class OverpassAPI:
     """
     Overpass API for detailed POI search
-    
+
     Queries OpenStreetMap using powerful query language
     Can find restaurants, hotels, museums, etc. with opening hours, ratings, etc.
     """
-    
+
     def __init__(self):
         self.base_url = "https://overpass-api.de/api/interpreter"
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'TripPlanner/1.0 (Educational)'
-        })
-        self.request_delay = 1  # Reduced: 1s between requests is enough
+        self.session = _make_session()
+        self.request_delay = 1  # 1s between requests to respect the free API
     
     def search_activities(
         self,
@@ -34,26 +56,25 @@ class OverpassAPI:
     ) -> List[Dict]:
         """
         Search for activities/POIs using OSM tags
-        
+
         Args:
             lat, lng: Center coordinates
             tags: OSM tags like ["amenity=restaurant", "tourism=museum"]
             radius_meters: Search radius
-        
+
         Returns:
             List of activities with details
         """
         print(f"🏪 Searching Overpass API for activities...")
-        
+
         activities = []
-        
+
         for tag in tags:
             try:
-                # Build Overpass QL query
                 parts = tag.split("=")
                 key = parts[0]
                 value = parts[1] if len(parts) > 1 else ""
-                
+
                 if value:
                     query = f"""
                     [out:json];
@@ -73,32 +94,30 @@ class OverpassAPI:
                     );
                     out body geom;
                     """
-                
-                time.sleep(self.request_delay)  # Rate limiting
-                
+
+                time.sleep(self.request_delay)
+
                 print(f"   Querying: {tag}")
                 response = self.session.post(
                     self.base_url,
                     data=query,
-                    timeout=30
+                    timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
                 )
                 response.raise_for_status()
-                
+
                 data = response.json()
-                
-                # Parse results
                 for element in data.get("elements", []):
                     activity = self._parse_element(element, tag)
                     if activity:
                         activities.append(activity)
-            
+
             except requests.exceptions.Timeout:
-                print(f"   ⏱️ Timeout for {tag}, retrying...")
+                logger.warning("Overpass timeout for tag '%s' — skipping", tag)
                 continue
             except Exception as e:
-                print(f"   ⚠️ Error querying {tag}: {e}")
+                logger.warning("Overpass error for tag '%s': %s", tag, e)
                 continue
-        
+
         print(f"   ✅ Found {len(activities)} activities")
         return activities
 
@@ -114,7 +133,6 @@ class OverpassAPI:
         """
         print(f"🏪 Batch querying Overpass API ({len(tags)} tags in 1 request)...")
 
-        # Build union of all tag filters
         union_parts = []
         for tag in tags:
             parts = tag.split("=")
@@ -127,15 +145,18 @@ class OverpassAPI:
 
         try:
             time.sleep(self.request_delay)
-            response = self.session.post(self.base_url, data=query, timeout=45)
+            response = self.session.post(
+                self.base_url,
+                data=query,
+                timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT + 15),  # extra room for large queries
+            )
             response.raise_for_status()
             data = response.json()
 
             activities = []
             for element in data.get("elements", []):
-                # Determine which tag this element matched
                 elem_tags = element.get("tags", {})
-                matched_tag = "tourism=hotel"
+                matched_tag = "tourism=attraction"
                 for tag in tags:
                     k, _, v = tag.partition("=")
                     if elem_tags.get(k) == v:
@@ -148,8 +169,11 @@ class OverpassAPI:
             print(f"   ✅ Found {len(activities)} activities")
             return activities
 
+        except requests.exceptions.Timeout:
+            logger.warning("Overpass batch query timed out — falling back to sequential")
+            return self.search_activities(lat, lng, tags, radius_meters)
         except Exception as e:
-            print(f"   ⚠️ Batch query failed: {e}, falling back to sequential")
+            logger.warning("Overpass batch query failed (%s) — falling back to sequential", e)
             return self.search_activities(lat, lng, tags, radius_meters)
 
     def _parse_element(self, element: Dict, tag: str) -> Optional[Dict]:
@@ -232,6 +256,7 @@ class OverpassAPI:
             "amenity=library": "library",
             "amenity=spa": "spa",
             "amenity=swimming_pool": "swimming_pool",
+            "amenity=place_of_worship": "place_of_worship",
             
             # Tourism
             "tourism=museum": "museum",
@@ -242,22 +267,31 @@ class OverpassAPI:
             "tourism=viewpoint": "viewpoint",
             "tourism=attraction": "attraction",
             "tourism=tour_operator": "tour_operator",
+            "tourism=zoo": "zoo",
             
             # Leisure
             "leisure=park": "park",
             "leisure=garden": "garden",
             "leisure=swimming_pool": "swimming_pool",
             "leisure=sports_centre": "sports_centre",
+            "leisure=playground": "playground",
+            "leisure=nature_reserve": "nature_reserve",
             
             # Shops
             "shop=mall": "shopping",
             "shop=supermarket": "supermarket",
             "shop=market": "market",
+            "shop=clothes": "shopping",
             
-            # Historic
+            # Historic — including India-specific fort/palace/castle/temple
             "historic=monument": "monument",
             "historic=memorial": "monument",
-            "historic=archaeological_site": "archaeological_site"
+            "historic=archaeological_site": "archaeological_site",
+            "historic=fort": "fort",
+            "historic=castle": "castle",
+            "historic=palace": "palace",
+            "historic=building": "historical_building",
+            "historic=temple": "temple",
         }
         
         # Check exact matches
@@ -333,8 +367,19 @@ class OverpassAPI:
             "park": 0,
             "art_gallery": 250,
             "shopping": 0,
-            "monument": 0,
-            "viewpoint": 0
+            "monument": 50,
+            "viewpoint": 0,
+            # India-specific
+            "fort": 500,
+            "castle": 500,
+            "palace": 600,
+            "temple": 0,
+            "place_of_worship": 0,
+            "historical_building": 100,
+            "archaeological_site": 300,
+            "zoo": 300,
+            "nature_reserve": 0,
+            "playground": 0,
         }
         
         return category_costs.get(category, 0)
@@ -362,8 +407,20 @@ class OverpassAPI:
             "shopping": 120,
             "monument": 45,
             "viewpoint": 30,
-            "hotel": 0,  # Accommodation, not an activity
+            # India-specific
+            "fort": 150,
+            "castle": 150,
+            "palace": 120,
+            "temple": 60,
+            "place_of_worship": 45,
+            "historical_building": 60,
+            "archaeological_site": 90,
+            "zoo": 120,
+            "nature_reserve": 90,
+            "playground": 60,
+            # Accommodation (not activities)
+            "hotel": 0,
             "hostel": 0,
-            "guest_house": 0
+            "guest_house": 0,
         }
         return duration_map.get(category, 60)
